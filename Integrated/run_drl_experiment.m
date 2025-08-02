@@ -80,11 +80,14 @@ end
 Ts = Ts; 
 Tf = simulationDays * 24 * 3600; 
 
-% This is critical for ensuring stability and compatibility with the discrete RL agent.
-fprintf('>> Using DRL-compatible fixed-step solver configuration...\n');
-set_param(model_name, 'SolverType', 'Fixed-step');
-set_param(model_name, 'Solver', 'ode3'); % A robust fixed-step solver
-set_param(model_name, 'FixedStep', num2str(Ts));
+% Set the solver configuration for the simulation.
+% As per the analysis, a variable-step solver is better suited for this physical model
+% to handle potential stiff dynamics during large power transients.
+% ode23tb is a good choice for moderately stiff problems.
+fprintf('>> Using variable-step solver ode23tb as recommended for physical system simulation.\n');
+set_param(model_name, 'SolverType', 'Variable-step');
+set_param(model_name, 'Solver', 'ode23tb');
+% The 'FixedStep' parameter is not used for variable-step solvers.
 
 
 stop_time_seconds = 24 * 3600; % 24-hour simulation
@@ -92,54 +95,10 @@ set_param(model_name, 'StopTime', num2str(stop_time_seconds));
 fprintf('>> Model StopTime set to: %d seconds (24.0 hours)\n', stop_time_seconds);
 
 
-% This section is now critical because we are forcing a fixed-step solver.
-fprintf('>> Synchronizing all block sample times for fixed-step solver...\n');
-
-% CRITICAL FIX: Ensure all relevant blocks use the model's fixed step size (Ts).
-% The "Digital Clock" block was identified as having a mismatched sample time.
-try
-    digital_clock_blocks = find_system(model_name, 'BlockType', 'DigitalClock');
-    for i = 1:length(digital_clock_blocks)
-        set_param(digital_clock_blocks{i}, 'SampleTime', num2str(Ts));
-        fprintf('   Synchronized Digital Clock: %s\n', digital_clock_blocks{i});
-    end
-catch ME
-    fprintf('   Warning: Could not fix Digital Clock blocks: %s\n', ME.message);
-end
-
-    % From Workspace
-    try
-        from_workspace_blocks = find_system(model_name, 'BlockType', 'FromWorkspace');
-        for i = 1:length(from_workspace_blocks)
-            set_param(from_workspace_blocks{i}, 'SampleTime', num2str(Ts));
-            fprintf('   Fixed From Workspace: %s\n', from_workspace_blocks{i});
-        end
-    catch ME
-        fprintf('   Warning: Could not fix From Workspace blocks: %s\n', ME.message);
-    end
-
-
-    try
-        block_types_to_fix = {'ToWorkspace', 'Scope', 'Display', 'Clock'};
-        for j = 1:length(block_types_to_fix)
-            blocks = find_system(model_name, 'BlockType', block_types_to_fix{j});
-            for i = 1:length(blocks)
-                try
-                    set_param(blocks{i}, 'SampleTime', num2str(Ts));
-                    fprintf('   Fixed %s: %s\n', block_types_to_fix{j}, blocks{i});
-                catch
-
-                end
-            end
-        end
-    catch ME
-        fprintf('   Warning: Could not fix some blocks: %s\n', ME.message);
-    end
-% This logic is no longer needed as we now always force a fixed-step solver.
-% else
-%     fprintf('>> Using variable-step solver - no sampling time fixes needed\n');
-%     % ...
-% end
+% The model is now expected to be pre-configured correctly by the
+% fix_simulink_sample_times.m script. The following manual synchronization
+% is no longer needed and has been removed to prevent configuration conflicts.
+fprintf('>> Assuming model sample times are correctly pre-configured.\n');
 
 fprintf('>> Model configured: Ts=%d, StopTime=%d\n', Ts, 24*Ts);
 
@@ -219,11 +178,11 @@ agentOpts.NoiseOptions.VarianceMin = 0.01 * Pnom;
 
 agent = rlDDPGAgent(actor, critic, agentOpts);
 
-% --- ??agent?????base?????????RL Agent????? ---
-assignin('base', 'agentObj', agent);  % RL Agent?????????'agentObj'?????
+
+assignin('base', 'agentObj', agent);  
 fprintf('>> Agent assigned to base workspace as "agentObj"\n');
 
-% --- ????????????????base????????? ---
+
 assignin('base', 'pv_power_profile', pv_power_profile);
 assignin('base', 'load_power_profile', load_power_profile);
 assignin('base', 'price_profile', price_profile);
@@ -290,23 +249,21 @@ end
 disp('... Agent and environment defined.');
 
 
-%% 4. ?????????? ?? ???? (Main Execution: Train or Load)
+%% 4. Main Execution: Train or Load
 % -------------------------------------------------------------------------
 if TRAIN_NEW_AGENT
     disp('STEP 3: Starting agent training...');
     
-    % +++ ????????3: ????????? UseDevice ???? - R2025a ???? +++
-    % ??????????????????????
-    % Episode steps = 0 ???????????????????????
+
     current_stop_time = str2double(get_param(model_name, 'StopTime'));
-    required_stop_time = 2 * 3600;  % ????2???
+    required_stop_time = 2 * 3600; 
 
     if current_stop_time < required_stop_time
         set_param(model_name, 'StopTime', num2str(required_stop_time));
         fprintf('>> Fixed StopTime: %d -> %d seconds\n', current_stop_time, required_stop_time);
     end
 
-    % ????????????????
+
     trainOpts = rlTrainingOptions(...
         'MaxEpisodes', 100, ...  % 增加训练回合数以进行充分学习
         'MaxStepsPerEpisode', 24, ...  % 每个回合模拟完整的一天 (24 * 3600 / Ts)
@@ -319,7 +276,7 @@ if TRAIN_NEW_AGENT
         'SaveAgentValue', -1000, ... % 保存奖励高于-1000的Agent
         'SaveAgentDirectory', 'saved_agents');
 
-    % ??????
+
     fprintf('>> Starting training with %d episodes, max %d steps per episode\n', ...
             trainOpts.MaxEpisodes, trainOpts.MaxStepsPerEpisode);
 
@@ -366,7 +323,7 @@ if TRAIN_NEW_AGENT
     disp('... Training finished. Saving agent...');
     save(saved_agent_filename, 'agent');
 
-    % ?????????
+
     if ~isempty(trainingStats.EpisodeSteps)
         final_steps = trainingStats.EpisodeSteps(end);
         final_reward = trainingStats.EpisodeReward(end);
@@ -390,18 +347,18 @@ else
 end
 
 
-%% 5. ???????? (Performance Evaluation)
+%% 5. Performance Evaluation
 disp('STEP 4: Evaluating agent performance...');
 try
-    % ?????????????
+
     simIn = Simulink.SimulationInput(model_name);
-    simIn = simIn.setModelParameter('StopTime', num2str(24 * 3600));  % 1??????
+    simIn = simIn.setModelParameter('StopTime', num2str(24 * 3600)); 
     simIn = simIn.setModelParameter('ReturnWorkspaceOutputs', 'on');
 
     simOut = sim(simIn);
     disp('... Simulation for evaluation complete.');
 
-    % ??????????
+
     if exist('trainingStats', 'var') && ~isempty(trainingStats.EpisodeSteps)
         avg_steps = mean(trainingStats.EpisodeSteps(trainingStats.EpisodeSteps > 0));
         avg_reward = mean(trainingStats.EpisodeReward(trainingStats.EpisodeSteps > 0));
@@ -515,7 +472,7 @@ disp('... Experiment finished.');
 disp('========================================');
 
 
-%% 7. ??????? (Local Functions)
+%% 7. Local Functions
 function in = localResetFcn(in, modelName, soc_min, soc_max)
     random_soc = rand() * (soc_max - soc_min) + soc_min;
     block_path = [modelName, '/Energy Storage'];
