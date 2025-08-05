@@ -13,17 +13,18 @@
 
 clear; clc; close all;
 
+% Force MATLAB to use software (CPU) rendering to avoid potential GPU driver issues
+opengl('software');
+fprintf('>> Graphics renderer set to SOFTWARE (CPU) to ensure stability.\n\n');
+
 %% 1. Control Panel
 % -------------------------------------------------------------------------
 disp('========================================');
 disp('   DRL Microgrid Experiment Runner v3.0 ');
 disp('========================================');
 
-% --- Variant Subsystem Control ---
-% 0 = Use RL Agent block (for training/evaluation)
-% 1 = Use manual Inport (for manual_training_loop.m)
-VSS_MODE = 0;
 
+% Training configuration flags
 TRAIN_NEW_AGENT = true;
 data_filename = 'simulation_data_10days_random.mat'; 
 model_name = 'Microgrid2508020734';
@@ -41,6 +42,7 @@ catch ME
     error('Failed to load model %s: %s', model_name, ME.message);
 end
 
+% Determine training device (GPU or CPU)
 trainingDevice = "cpu"; 
 if ~isempty(ver('parallel')) && gpuDeviceCount > 0
     trainingDevice = "gpu";
@@ -53,17 +55,18 @@ end
 % -------------------------------------------------------------------------
 disp(['STEP 1: Loading simulation data from "', data_filename, '"...']);
 try
-
+    % Check what variables are available in the data file
     data_vars = whos('-file', data_filename);
     var_names = {data_vars.name};
 
+    % Load the simulation data file
     load(data_filename);
 
-
+    % Check for solver configuration in the data file
     if ismember('solver_type', var_names) && ismember('solver_name', var_names)
         fprintf('... Data loaded with solver configuration: %s (%s)\n', solver_type, solver_name);
     else
-
+        % Use default solver configuration if not specified in data file
         solver_type = 'fixed';
         solver_name = 'ode1';
         fprintf('... Data loaded (legacy format), using default solver: %s (%s)\n', solver_type, solver_name);
@@ -76,9 +79,9 @@ catch ME
     rethrow(ME);
 end
 
-
-Ts = Ts; 
-Tf = simulationDays * 24 * 3600; 
+% Set simulation parameters
+Ts = Ts; % Sample time from loaded data
+Tf = simulationDays * 24 * 3600; % Final simulation time in seconds
 
 % Set the solver configuration for the simulation.
 % As per the analysis, a variable-step solver is better suited for this physical model
@@ -89,11 +92,10 @@ set_param(model_name, 'SolverType', 'Variable-step');
 set_param(model_name, 'Solver', 'ode23tb');
 % The 'FixedStep' parameter is not used for variable-step solvers.
 
-
+% Set model stop time to 24 hours for training episodes
 stop_time_seconds = 24 * 3600; % 24-hour simulation
 set_param(model_name, 'StopTime', num2str(stop_time_seconds));
 fprintf('>> Model StopTime set to: %d seconds (24.0 hours)\n', stop_time_seconds);
-
 
 % The model is now expected to be pre-configured correctly by the
 % fix_simulink_sample_times.m script. The following manual synchronization
@@ -102,22 +104,28 @@ fprintf('>> Assuming model sample times are correctly pre-configured.\n');
 
 fprintf('>> Model configured: Ts=%d, StopTime=%d\n', Ts, 24*Ts);
 
-% ?????????????????
-PnomkW = 500; Pnom = PnomkW * 1e3;
-kWh_Rated = 100; C_rated_Ah = kWh_Rated * 1000 / 5000;
-Efficiency = 96; Initial_SOC_pc = 80;
-Initial_SOC_pc_MIN = 30; Initial_SOC_pc_MAX = 80;
-COST_PER_AH_LOSS = 0.25; SOC_UPPER_LIMIT = 95.0;
-SOC_LOWER_LIMIT = 15.0; SOH_FAILURE_THRESHOLD = 0.8;
+% Battery and system parameters definition
+PnomkW = 500; % Nominal power in kW
+Pnom = PnomkW * 1e3; % Convert to Watts
+kWh_Rated = 100; % Battery capacity in kWh
+C_rated_Ah = kWh_Rated * 1000 / 5000; % Convert to Amp-hours assuming 5000V nominal
+Efficiency = 96; % Battery efficiency percentage
+Initial_SOC_pc = 80; % Initial state of charge percentage
+Initial_SOC_pc_MIN = 30; % Minimum initial SOC for randomization
+Initial_SOC_pc_MAX = 80; % Maximum initial SOC for randomization
+COST_PER_AH_LOSS = 0.25; % Cost penalty for battery degradation
+SOC_UPPER_LIMIT = 95.0; % Upper SOC operating limit
+SOC_LOWER_LIMIT = 15.0; % Lower SOC operating limit
+SOH_FAILURE_THRESHOLD = 0.8; % State of health failure threshold
 
+% Display training mode
 if TRAIN_NEW_AGENT
     fprintf('>> MODE: TRAINING a new agent for %d day(s) on [%s].\n\n', simulationDays, upper(trainingDevice));
 else
     fprintf('>> MODE: EVALUATING pre-trained agent for %d day(s): %s\n\n', simulationDays, saved_agent_filename);
 end
 
-
-%% 3. RL?????????????? (RL Agent & Environment Definition)
+%% 3. RL Agent and Environment Definition
 % -------------------------------------------------------------------------
 disp('STEP 2: Defining RL agent and Simulink environment...');
 
@@ -128,10 +136,21 @@ fprintf('>> Using fixed observation dimension: %d\n', num_observations);
 obsInfo = rlNumericSpec([num_observations 1], 'Name', 'Microgrid State');
 actInfo = rlNumericSpec([1 1], 'LowerLimit', -Pnom, 'UpperLimit', Pnom, 'Name', 'Battery Power Command');
 
-% --- ??R2025a v3.3 ?????????????? Critic ---
-statePath = [featureInputLayer(num_observations, 'Normalization', 'none', 'Name', 'obs'), fullyConnectedLayer(128, 'Name', 'fc_obs')];
-actionPath = [featureInputLayer(1, 'Normalization', 'none', 'Name', 'act'), fullyConnectedLayer(128, 'Name', 'fc_act')];
-commonPath = [additionLayer(2, 'Name', 'add'), reluLayer('Name', 'relu1'), fullyConnectedLayer(64, 'Name', 'fc_common'), reluLayer('Name', 'relu2'), fullyConnectedLayer(1, 'Name', 'q_value')];
+% --- Create R2025a v3.3 Compatible Critic Network ---
+% State processing path
+statePath = [featureInputLayer(num_observations, 'Normalization', 'zscore', 'Name', 'obs'), ...
+             fullyConnectedLayer(128, 'Name', 'fc_obs')];
+% Action processing path
+actionPath = [featureInputLayer(1, 'Normalization', 'none', 'Name', 'act'), ...
+              fullyConnectedLayer(128, 'Name', 'fc_act')];
+% Common processing path after concatenation
+commonPath = [additionLayer(2, 'Name', 'add'), ...
+              reluLayer('Name', 'relu1'), ...
+              fullyConnectedLayer(64, 'Name', 'fc_common'), ...
+              reluLayer('Name', 'relu2'), ...
+              fullyConnectedLayer(1, 'Name', 'q_value')];
+
+% Build the critic network architecture
 criticNetwork = layerGraph(statePath);
 criticNetwork = addLayers(criticNetwork, actionPath);
 criticNetwork = addLayers(criticNetwork, commonPath);
@@ -139,36 +158,47 @@ criticNetwork = connectLayers(criticNetwork, 'fc_obs', 'add/in1');
 criticNetwork = connectLayers(criticNetwork, 'fc_act', 'add/in2');
 criticdlnetwork = dlnetwork(criticNetwork, 'Initialize', false);
 
-% ???? Critic ???? - R2025a ??????
-% ?????Critic???
+% Configure Critic representation options for R2025a compatibility
 critic_options = rlRepresentationOptions(...
     'LearnRate', 1e-3, ...
     'GradientThreshold', 1);
 
+% Create the critic representation
 critic = rlQValueRepresentation(criticdlnetwork, obsInfo, actInfo, ...
     'Observation', {'obs'}, ...
     'Action', {'act'}, ...
-    critic_options); % ???? Critic ???? - R2025a ??????
+    critic_options);
 
-% --- ??R2025a v3.3 ?????????????? Actor ---
-actorNetwork = [featureInputLayer(num_observations, 'Normalization', 'none', 'Name', 'obs'), fullyConnectedLayer(128, 'Name', 'fc1'), reluLayer('Name', 'relu1'), fullyConnectedLayer(64, 'Name', 'fc2'), reluLayer('Name', 'relu2'), fullyConnectedLayer(1, 'Name', 'fc_action'), tanhLayer('Name','tanh'), scalingLayer('Name','action_scaling', 'Scale', Pnom)];
+% --- Create R2025a v3.3 Compatible Actor Network ---
+actorNetwork = [featureInputLayer(num_observations, 'Normalization', 'zscore', 'Name', 'obs'), ...
+                fullyConnectedLayer(128, 'Name', 'fc1'), ...
+                reluLayer('Name', 'relu1'), ...
+                fullyConnectedLayer(64, 'Name', 'fc2'), ...
+                reluLayer('Name', 'relu2'), ...
+                fullyConnectedLayer(1, 'Name', 'fc_action'), ...
+                tanhLayer('Name','tanh'), ...
+                scalingLayer('Name','action_scaling', 'Scale', Pnom)];
 actordlnetwork = dlnetwork(actorNetwork, 'Initialize', false);
 
-% +++ ????????2: ???????Actor??????????????????????? UseDevice +++
-% ?????Actor???
+% Configure Actor representation options
 actor_options = rlRepresentationOptions(...
     'LearnRate', 1e-4, ...
     'GradientThreshold', 1);
 
+% Create the actor representation
 actor = rlDeterministicActorRepresentation(actordlnetwork, obsInfo, actInfo, ...
     'Observation', {'obs'}, ...
     'Action', {'action_scaling'}, ...
     actor_options);
 
-% --- ???? DDPG Agent (????????????) ---
-agentOpts = rlDDPGAgentOptions('SampleTime', Ts, 'TargetSmoothFactor', 1e-3, 'DiscountFactor', 0.99, 'MiniBatchSize', 128, 'ExperienceBufferLength', 1e6);
+% --- Configure DDPG Agent with proper noise settings ---
+agentOpts = rlDDPGAgentOptions('SampleTime', Ts, ...
+                               'TargetSmoothFactor', 1e-3, ...
+                               'DiscountFactor', 0.99, ...
+                               'MiniBatchSize', 128, ...
+                               'ExperienceBufferLength', 1e6);
 
-% ????Ornstein-Uhlenbeck???? - R2025a??????
+% Configure Ornstein-Uhlenbeck noise process for R2025a compatibility
 % The MeanAttractionConstant must be scaled for the large sample time (Ts=3600)
 % to ensure the noise process is stable: abs(1 - MeanAttractionConstant*Ts) <= 1
 agentOpts.NoiseOptions.MeanAttractionConstant = 1e-4; % Scaled from 0.15 for stability
@@ -176,13 +206,14 @@ agentOpts.NoiseOptions.Variance = 0.1 * Pnom;
 agentOpts.NoiseOptions.VarianceDecayRate = 0.995;
 agentOpts.NoiseOptions.VarianceMin = 0.01 * Pnom;
 
+% Create the DDPG agent
 agent = rlDDPGAgent(actor, critic, agentOpts);
 
-
+% Assign agent to base workspace for Simulink access
 assignin('base', 'agentObj', agent);  
 fprintf('>> Agent assigned to base workspace as "agentObj"\n');
 
-
+% Assign data profiles to base workspace for Simulink model access
 assignin('base', 'pv_power_profile', pv_power_profile);
 assignin('base', 'load_power_profile', load_power_profile);
 assignin('base', 'price_profile', price_profile);
@@ -248,34 +279,32 @@ end
 
 disp('... Agent and environment defined.');
 
-
 %% 4. Main Execution: Train or Load
 % -------------------------------------------------------------------------
 if TRAIN_NEW_AGENT
     disp('STEP 3: Starting agent training...');
     
-
+    % Ensure model stop time is sufficient for training episodes
     current_stop_time = str2double(get_param(model_name, 'StopTime'));
-    required_stop_time = 2 * 3600; 
+    required_stop_time = 2 * 3600; % 2 hours minimum
 
     if current_stop_time < required_stop_time
         set_param(model_name, 'StopTime', num2str(required_stop_time));
         fprintf('>> Fixed StopTime: %d -> %d seconds\n', current_stop_time, required_stop_time);
     end
 
-
+    % Configure training options for a long overnight run
     trainOpts = rlTrainingOptions(...
-        'MaxEpisodes', 100, ...  % 增加训练回合数以进行充分学习
-        'MaxStepsPerEpisode', 24, ...  % 每个回合模拟完整的一天 (24 * 3600 / Ts)
+        'MaxEpisodes', 500, ...
+        'MaxStepsPerEpisode', 24, ...  % Each episode simulates a full day (24 * 3600 / Ts)
         'ScoreAveragingWindow', 10, ...
         'Verbose', true, ...
         'Plots', 'training-progress', ...
-        'StopTrainingCriteria', 'AverageReward', ... % 改用平均奖励作为停止标准更稳健
-        'StopTrainingValue', -500, ...  % 设定一个期望的平均奖励目标
+        'StopTrainingCriteria', 'AverageReward', ... % Use average reward as stopping criteria for robustness
+        'StopTrainingValue', -500, ...  % Set target average reward value
         'SaveAgentCriteria', 'EpisodeReward',...
-        'SaveAgentValue', -1000, ... % 保存奖励高于-1000的Agent
+        'SaveAgentValue', -1000, ... % Save agents with reward above -1000
         'SaveAgentDirectory', 'saved_agents');
-
 
     fprintf('>> Starting training with %d episodes, max %d steps per episode\n', ...
             trainOpts.MaxEpisodes, trainOpts.MaxStepsPerEpisode);
@@ -304,7 +333,7 @@ if TRAIN_NEW_AGENT
     catch ME_train
         fprintf('Training failed: %s\n', ME_train.message);
 
-        % Diagnose Mux blocks
+        % Diagnose Mux blocks for troubleshooting
         fprintf('Diagnosing Mux blocks:\n');
         try
             mux_blocks = find_system(model_name, 'BlockType', 'Mux');
@@ -323,16 +352,16 @@ if TRAIN_NEW_AGENT
     disp('... Training finished. Saving agent...');
     save(saved_agent_filename, 'agent');
 
-
+    % Display training summary
     if ~isempty(trainingStats.EpisodeSteps)
         final_steps = trainingStats.EpisodeSteps(end);
         final_reward = trainingStats.EpisodeReward(end);
         fprintf('>> Final episode: %d steps, reward: %.2f\n', final_steps, final_reward);
 
         if final_steps > 0
-            fprintf('? SUCCESS: Training completed with non-zero steps!\n');
+            fprintf('SUCCESS: Training completed with non-zero steps!\n');
         else
-            fprintf('? WARNING: Final episode still has 0 steps\n');
+            fprintf('WARNING: Final episode still has 0 steps\n');
         end
     end
 
@@ -346,19 +375,19 @@ else
     end
 end
 
-
 %% 5. Performance Evaluation
 disp('STEP 4: Evaluating agent performance...');
 try
-
+    % Configure simulation input for evaluation
     simIn = Simulink.SimulationInput(model_name);
     simIn = simIn.setModelParameter('StopTime', num2str(24 * 3600)); 
     simIn = simIn.setModelParameter('ReturnWorkspaceOutputs', 'on');
 
+    % Run evaluation simulation
     simOut = sim(simIn);
     disp('... Simulation for evaluation complete.');
 
-
+    % Display training statistics if available
     if exist('trainingStats', 'var') && ~isempty(trainingStats.EpisodeSteps)
         avg_steps = mean(trainingStats.EpisodeSteps(trainingStats.EpisodeSteps > 0));
         avg_reward = mean(trainingStats.EpisodeReward(trainingStats.EpisodeSteps > 0));
@@ -371,7 +400,6 @@ catch ME
     fprintf('Warning: Evaluation simulation failed: %s\n', ME.message);
     disp('This is not critical - the agent training was the main objective.');
 end
-
 
 %% 6. Data Extraction & Visualization
 disp('STEP 5: Extracting data and generating plots...');
@@ -389,13 +417,14 @@ try
         if ~isempty(logsout) && logsout.numElements > 0
             fprintf('   Logged signals available with %d elements.\n', logsout.numElements);
             try
-                P_pv_sim = logsout.get('P_pv').Values.Data / 1000;
-                P_load_sim = logsout.get('P_load').Values.Data / 1000;
-                P_batt_sim = logsout.get('P_batt').Values.Data / 1000;
-                SOC_sim = logsout.get('Battery_SOC').Values.Data;
-                SOH_sim = logsout.get('SOH').Values.Data;
-                Price_sim = logsout.get('price').Values.Data;
-                P_grid_sim = P_load_sim - P_pv_sim - P_batt_sim;
+                % Extract power and state data from simulation logs
+                P_pv_sim = logsout.get('P_pv').Values.Data / 1000; % Convert to kW
+                P_load_sim = logsout.get('P_load').Values.Data / 1000; % Convert to kW
+                P_batt_sim = logsout.get('P_batt').Values.Data / 1000; % Convert to kW
+                SOC_sim = logsout.get('Battery_SOC').Values.Data; % State of charge
+                SOH_sim = logsout.get('SOH').Values.Data; % State of health
+                Price_sim = logsout.get('price').Values.Data; % Electricity price
+                P_grid_sim = P_load_sim - P_pv_sim - P_batt_sim; % Calculate grid power
                 fprintf('   Data extraction successful.\n');
             catch ME_extract
                 fprintf('   Warning: Could not extract all logged signals: %s\n', ME_extract.message);
@@ -419,6 +448,7 @@ if exist('P_pv_sim', 'var') && exist('days', 'var')
 
     figure('Name', 'DRL Microgrid Control Performance', 'NumberTitle', 'off', 'Position', [100 100 1200 800]);
 
+    % Power balance subplot
     subplot(3, 1, 1);
     plot(days, P_pv_sim, 'g-'); hold on;
     plot(days, P_load_sim, 'b-');
@@ -432,6 +462,7 @@ if exist('P_pv_sim', 'var') && exist('days', 'var')
     grid on;
     xlim([0 days(end)]);
 
+    % SOC and price subplot
     subplot(3, 1, 2);
     yyaxis left;
     plot(days, SOC_sim, 'b-');
@@ -449,6 +480,7 @@ if exist('P_pv_sim', 'var') && exist('days', 'var')
     grid on;
     xlim([0 days(end)]);
 
+    % SOH degradation subplot
     subplot(3, 1, 3);
     plot(days, SOH_sim * 100, 'k-');
     title('SOH Degradation');
@@ -456,6 +488,8 @@ if exist('P_pv_sim', 'var') && exist('days', 'var')
     ylabel('SOH (%)');
     grid on;
     xlim([0 days(end)]);
+    
+    % Calculate degradation and set appropriate y-axis limits
     initial_soh = SOH_sim(1) * 100;
     final_soh = SOH_sim(end) * 100;
     ylim_buffer = (initial_soh - final_soh) * 0.1;
@@ -471,10 +505,16 @@ end
 disp('... Experiment finished.');
 disp('========================================');
 
-
 %% 7. Local Functions
 function in = localResetFcn(in, modelName, soc_min, soc_max)
+    % Local reset function for randomizing initial battery SOC
+    % This function is called at the beginning of each training episode
+    % to provide variety in initial conditions
+    
+    % Generate random initial SOC within specified bounds
     random_soc = rand() * (soc_max - soc_min) + soc_min;
+    
+    % Set the initial SOC parameter in the energy storage block
     block_path = [modelName, '/Energy Storage'];
     in = setBlockParameter(in, block_path, 'Initial_kWh_pc', num2str(random_soc));
 end
