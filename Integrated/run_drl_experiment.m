@@ -386,6 +386,10 @@ try
     % Run evaluation simulation
     simOut = sim(simIn);
     disp('... Simulation for evaluation complete.');
+    
+    % Save the simulation output for plotting
+    disp('>> Saving evaluation results to evaluation_results.mat...');
+    save('evaluation_results.mat', 'simOut');
 
     % Display training statistics if available
     if exist('trainingStats', 'var') && ~isempty(trainingStats.EpisodeSteps)
@@ -402,104 +406,55 @@ catch ME
 end
 
 %% 6. Data Extraction & Visualization
-disp('STEP 5: Extracting data and generating plots...');
+disp('STEP 5: Processing simulation results and generating plots...');
 
-try
-    % Add robustness check for simOut type as suggested
-    if exist('simOut', 'var') && isa(simOut, 'Simulink.Simulation.Output')
-        fprintf('   Simulation output is a valid Simulink.Simulation.Output object.\n');
-        
-        % Extract data using the .get() method
-        logsout = simOut.get('logsout');
-        tout = simOut.get('tout');
-        days = tout / (3600 * 24);
+% Check if simulation output is available
+if exist('simOut', 'var') && ~isempty(simOut)
+    try
+        % Process simulation results
+        simulation_results = processSimulationResults(simOut, model_name);
 
-        if ~isempty(logsout) && logsout.numElements > 0
-            fprintf('   Logged signals available with %d elements.\n', logsout.numElements);
-            try
-                % Extract power and state data from simulation logs
-                P_pv_sim = logsout.get('P_pv').Values.Data / 1000; % Convert to kW
-                P_load_sim = logsout.get('P_load').Values.Data / 1000; % Convert to kW
-                P_batt_sim = logsout.get('P_batt').Values.Data / 1000; % Convert to kW
-                SOC_sim = logsout.get('Battery_SOC').Values.Data; % State of charge
-                SOH_sim = logsout.get('SOH').Values.Data; % State of health
-                Price_sim = logsout.get('price').Values.Data; % Electricity price
-                P_grid_sim = P_load_sim - P_pv_sim - P_batt_sim; % Calculate grid power
-                fprintf('   Data extraction successful.\n');
-            catch ME_extract
-                fprintf('   Warning: Could not extract all logged signals: %s\n', ME_extract.message);
-                fprintf('   This might happen if signal logging is not configured correctly in the model.\n');
-            end
+        % Generate plots using the modular plotting system
+        generateDRLPlots(simulation_results, saved_agent_filename);
+
+        % Display results summary
+        displayResultsSummary(simulation_results);
+
+        disp('>> Visualization complete. Check the plots folder for generated charts.');
+
+    catch ME_plot
+        fprintf('Warning: Plotting failed: %s\n', ME_plot.message);
+        fprintf('Simulation output is available but could not be processed for plotting.\n');
+
+        % Provide diagnostic information
+        if isstruct(simOut)
+            fields = fieldnames(simOut);
+            fprintf('Available simOut fields: %s\n', strjoin(fields, ', '));
         else
-            fprintf('   Warning: Logged signals (logsout) are empty.\n');
+            fprintf('simOut type: %s\n', class(simOut));
         end
-    else
-        fprintf('   Warning: Simulation output is not available or has an unexpected type.\n');
-        fprintf('   Skipping visualization.\n');
     end
-catch ME
-    fprintf('   Error during data extraction: %s\n', ME.message);
-    fprintf('   Skipping visualization.\n');
-end
-
-% Generate plots only if data is available
-if exist('P_pv_sim', 'var') && exist('days', 'var')
-    fprintf('   Generating performance plots...\n');
-
-    figure('Name', 'DRL Microgrid Control Performance', 'NumberTitle', 'off', 'Position', [100 100 1200 800]);
-
-    % Power balance subplot
-    subplot(3, 1, 1);
-    plot(days, P_pv_sim, 'g-'); hold on;
-    plot(days, P_load_sim, 'b-');
-    plot(days, P_grid_sim, 'r--');
-    plot(days, P_batt_sim, 'm-.', 'LineWidth', 1.5);
-    hold off;
-    title('System Power Balance');
-    xlabel('Time (days)');
-    ylabel('Power (kW)');
-    legend('PV', 'Load', 'Grid', 'Battery', 'Location', 'best');
-    grid on;
-    xlim([0 days(end)]);
-
-    % SOC and price subplot
-    subplot(3, 1, 2);
-    yyaxis left;
-    plot(days, SOC_sim, 'b-');
-    ylabel('SOC (%)');
-    ylim([0 100]);
-    hold on;
-    yyaxis right;
-    area(days, Price_sim, 'FaceColor', [1 0.8 0.8], 'EdgeColor', 'none', 'FaceAlpha', 0.5);
-    plot(days, Price_sim, 'r--');
-    ylabel('Price ($/kWh)');
-    hold off;
-    title('SOC vs. Price');
-    xlabel('Time (days)');
-    legend('SOC', 'Price', 'Location', 'best');
-    grid on;
-    xlim([0 days(end)]);
-
-    % SOH degradation subplot
-    subplot(3, 1, 3);
-    plot(days, SOH_sim * 100, 'k-');
-    title('SOH Degradation');
-    xlabel('Time (days)');
-    ylabel('SOH (%)');
-    grid on;
-    xlim([0 days(end)]);
-    
-    % Calculate degradation and set appropriate y-axis limits
-    initial_soh = SOH_sim(1) * 100;
-    final_soh = SOH_sim(end) * 100;
-    ylim_buffer = (initial_soh - final_soh) * 0.1;
-    if ylim_buffer == 0; ylim_buffer = 0.001; end;
-    ylim([final_soh - ylim_buffer, initial_soh + ylim_buffer]);
-    legend(sprintf('Degradation over %d day(s): %.4f %%', simulationDays, initial_soh - final_soh), 'Location', 'best');
-
-    fprintf('   Plotting complete.\n');
 else
-    fprintf('   Skipping plots - simulation data not available\n');
+    fprintf('Warning: Simulation output is not available or has an unexpected type.\n');
+    fprintf('This may occur if the evaluation simulation failed or was skipped.\n');
+
+    % Try to load from saved file
+    if exist('evaluation_results.mat', 'file')
+        try
+            fprintf('>> Attempting to load simulation results from evaluation_results.mat...\n');
+            eval_data = load('evaluation_results.mat');
+            if isfield(eval_data, 'simOut')
+                simulation_results = processSimulationResults(eval_data.simOut, model_name);
+                generateDRLPlots(simulation_results, saved_agent_filename);
+                displayResultsSummary(simulation_results);
+                disp('>> Successfully generated plots from saved evaluation results.');
+            else
+                fprintf('Warning: No simOut found in evaluation_results.mat\n');
+            end
+        catch ME_load
+            fprintf('Warning: Could not load or process saved evaluation results: %s\n', ME_load.message);
+        end
+    end
 end
 
 disp('... Experiment finished.');
@@ -510,11 +465,464 @@ function in = localResetFcn(in, modelName, soc_min, soc_max)
     % Local reset function for randomizing initial battery SOC
     % This function is called at the beginning of each training episode
     % to provide variety in initial conditions
-    
+
     % Generate random initial SOC within specified bounds
     random_soc = rand() * (soc_max - soc_min) + soc_min;
-    
+
     % Set the initial SOC parameter in the energy storage block
     block_path = [modelName, '/Energy Storage'];
     in = setBlockParameter(in, block_path, 'Initial_kWh_pc', num2str(random_soc));
+end
+
+function simulation_results = processSimulationResults(simOut, model_name)
+    % Process simulation output into a standardized format for plotting
+
+    fprintf('>> Processing simulation results...\n');
+
+    % Initialize results structure
+    simulation_results = struct();
+    simulation_results.type = 'drl_experiment';
+    simulation_results.model_name = model_name;
+    simulation_results.timestamp = datetime('now');
+
+    try
+        % Extract time vector
+        if isfield(simOut, 'tout')
+            time_vector = simOut.tout;
+        elseif isfield(simOut, 'time')
+            time_vector = simOut.time;
+        else
+            % Try to get time from logged signals
+            if isfield(simOut, 'logsout') && ~isempty(simOut.logsout)
+                logsout = simOut.logsout;
+                if isa(logsout, 'Simulink.SimulationData.Dataset')
+                    % Get time from first signal
+                    if logsout.numElements > 0
+                        first_element = logsout.getElement(1);
+                        time_vector = first_element.Values.Time;
+                    else
+                        error('No logged signals found in simulation output');
+                    end
+                else
+                    error('Unexpected logsout format');
+                end
+            else
+                error('No time vector found in simulation output');
+            end
+        end
+
+        simulation_results.time = time_vector;
+        simulation_results.time_days = time_vector / (24 * 3600);
+
+        % Extract logged signals
+        simulation_results.signals = extractDRLSignals(simOut);
+
+        % Calculate performance metrics
+        simulation_results.metrics = calculateDRLMetrics(simulation_results.signals, time_vector);
+
+        fprintf('   Successfully processed %d data points over %.2f days\n', ...
+                length(time_vector), time_vector(end)/(24*3600));
+
+    catch ME
+        fprintf('   Warning: Error processing simulation results: %s\n', ME.message);
+
+        % Create minimal structure with available data
+        simulation_results.time = [];
+        simulation_results.signals = struct();
+        simulation_results.metrics = struct();
+        simulation_results.error = ME.message;
+    end
+end
+
+function signals = extractDRLSignals(simOut)
+    % Extract key signals from DRL simulation output
+
+    signals = struct();
+
+    try
+        % Get logged signals
+        if isfield(simOut, 'logsout') && ~isempty(simOut.logsout)
+            logsout = simOut.logsout;
+        else
+            fprintf('   Warning: No logsout found in simulation output\n');
+            return;
+        end
+
+        % Common signal names to look for
+        signal_names = {
+            {'P_pv', 'PV_Power', 'pv_power_profile', 'PV'}, 'P_pv';
+            {'P_load', 'Load_Power', 'load_power_profile', 'Load'}, 'P_load';
+            {'P_batt', 'Battery_Power', 'Batt_Power', 'P_battery'}, 'P_batt';
+            {'P_grid', 'Grid_Power', 'P_net', 'Net_Power'}, 'P_grid';
+            {'SOC', 'Battery_SOC', 'SOC_Battery', 'State_of_Charge'}, 'SOC';
+            {'SOH', 'Battery_SOH', 'SOH_Battery', 'State_of_Health'}, 'SOH';
+            {'price', 'Price', 'price_profile', 'Electricity_Price'}, 'price';
+            {'action', 'RL_Action', 'Agent_Action', 'Control_Action'}, 'action'
+        };
+
+        % Extract signals based on type
+        if isa(logsout, 'Simulink.SimulationData.Dataset')
+            % Dataset format
+            for i = 1:logsout.numElements
+                element = logsout.getElement(i);
+                signal_name = element.Name;
+
+                % Map to standard name
+                standard_name = mapSignalName(signal_name, signal_names);
+                if ~isempty(standard_name)
+                    signals.(standard_name) = element.Values.Data;
+                end
+            end
+        else
+            % Try other formats
+            field_names = fieldnames(logsout);
+            for i = 1:length(field_names)
+                signal_name = field_names{i};
+                standard_name = mapSignalName(signal_name, signal_names);
+                if ~isempty(standard_name)
+                    signal_data = logsout.(signal_name);
+                    if isstruct(signal_data) && isfield(signal_data, 'Data')
+                        signals.(standard_name) = signal_data.Data;
+                    else
+                        signals.(standard_name) = signal_data;
+                    end
+                end
+            end
+        end
+
+        fprintf('   Extracted %d signals from simulation output\n', length(fieldnames(signals)));
+
+    catch ME
+        fprintf('   Warning: Error extracting signals: %s\n', ME.message);
+    end
+end
+
+function standard_name = mapSignalName(signal_name, signal_names)
+    % Map signal name to standard name
+
+    standard_name = '';
+
+    for i = 1:size(signal_names, 1)
+        possible_names = signal_names{i, 1};
+        target_name = signal_names{i, 2};
+
+        if any(strcmpi(signal_name, possible_names))
+            standard_name = target_name;
+            break;
+        end
+    end
+end
+
+function metrics = calculateDRLMetrics(signals, time_vector)
+    % Calculate performance metrics for DRL experiment
+
+    metrics = struct();
+
+    if isempty(signals) || isempty(time_vector)
+        return;
+    end
+
+    try
+        % Time metrics
+        time_hours = time_vector / 3600;
+        metrics.duration_hours = time_hours(end);
+        metrics.duration_days = metrics.duration_hours / 24;
+
+        % Energy calculations (convert W to kW and integrate)
+        if isfield(signals, 'P_pv') && ~isempty(signals.P_pv)
+            P_pv_kW = signals.P_pv / 1000;
+            metrics.pv_energy_kwh = trapz(time_hours, P_pv_kW);
+        end
+
+        if isfield(signals, 'P_load') && ~isempty(signals.P_load)
+            P_load_kW = signals.P_load / 1000;
+            metrics.load_energy_kwh = trapz(time_hours, P_load_kW);
+        end
+
+        if isfield(signals, 'P_batt') && ~isempty(signals.P_batt)
+            P_batt_kW = signals.P_batt / 1000;
+            metrics.battery_charge_energy = trapz(time_hours, max(-P_batt_kW, 0));
+            metrics.battery_discharge_energy = trapz(time_hours, max(P_batt_kW, 0));
+        end
+
+        if isfield(signals, 'P_grid') && ~isempty(signals.P_grid)
+            P_grid_kW = signals.P_grid / 1000;
+            metrics.grid_import_energy = trapz(time_hours, max(P_grid_kW, 0));
+            metrics.grid_export_energy = trapz(time_hours, abs(min(P_grid_kW, 0)));
+            metrics.net_grid_energy = trapz(time_hours, P_grid_kW);
+        end
+
+        % SOC metrics
+        if isfield(signals, 'SOC') && ~isempty(signals.SOC)
+            metrics.soc_min = min(signals.SOC);
+            metrics.soc_max = max(signals.SOC);
+            metrics.soc_avg = mean(signals.SOC);
+            metrics.soc_final = signals.SOC(end);
+            metrics.soc_initial = signals.SOC(1);
+        end
+
+        % SOH metrics
+        if isfield(signals, 'SOH') && ~isempty(signals.SOH)
+            metrics.soh_initial = signals.SOH(1);
+            metrics.soh_final = signals.SOH(end);
+            metrics.soh_degradation = (metrics.soh_initial - metrics.soh_final) * 100;
+        end
+
+        % Economic metrics
+        if isfield(signals, 'price') && isfield(signals, 'P_grid') && ...
+           ~isempty(signals.price) && ~isempty(signals.P_grid)
+            P_grid_kW = signals.P_grid / 1000;
+            metrics.electricity_cost = trapz(time_hours, P_grid_kW .* signals.price);
+            metrics.avg_price = mean(signals.price);
+        end
+
+        % DRL-specific metrics
+        if isfield(signals, 'action') && ~isempty(signals.action)
+            metrics.action_mean = mean(signals.action);
+            metrics.action_std = std(signals.action);
+            metrics.action_range = [min(signals.action), max(signals.action)];
+        end
+
+    catch ME
+        fprintf('   Warning: Error calculating metrics: %s\n', ME.message);
+    end
+end
+
+function generateDRLPlots(simulation_results, agent_filename)
+    % Generate plots for DRL experiment using modular plotting system
+
+    fprintf('>> Generating DRL experiment plots...\n');
+
+    try
+        % Check if modular plotting system is available
+        if exist('modular_plotting_system.m', 'file') ~= 2
+            fprintf('   Warning: modular_plotting_system.m not found, using basic plotting\n');
+            generateBasicDRLPlots(simulation_results, agent_filename);
+            return;
+        end
+
+        % Create output directory
+        [~, agent_name, ~] = fileparts(agent_filename);
+        output_dir = sprintf('drl_plots_%s_%s', agent_name, ...
+                           string(datetime('now', 'Format', 'yyyyMMdd_HHmmss')));
+
+        % Configure plotting
+        plot_config = struct();
+        plot_config.theme = 'publication';
+        plot_config.format = 'png';
+        plot_config.resolution = 300;
+        plot_config.save_plots = true;
+        plot_config.show_plots = false;
+        plot_config.verbose = true;
+
+        % Generate comprehensive plots
+        plot_types = {'power_balance', 'soc_price', 'battery_performance', 'economic_analysis'};
+
+        % Add DRL-specific action plot if action data is available
+        if isfield(simulation_results.signals, 'action')
+            plot_types{end+1} = 'drl_actions';
+        end
+
+        % Call modular plotting system
+        modular_plotting_system('data_struct', simulation_results, ...
+                               'plot_types', plot_types, ...
+                               'output_dir', output_dir, ...
+                               'config', plot_config);
+
+        % Generate DRL-specific action plot
+        if isfield(simulation_results.signals, 'action')
+            generateDRLActionPlot(simulation_results, output_dir);
+        end
+
+        fprintf('   DRL plots saved to: %s\n', output_dir);
+
+    catch ME
+        fprintf('   Warning: Modular plotting failed: %s\n', ME.message);
+        fprintf('   Falling back to basic plotting...\n');
+        generateBasicDRLPlots(simulation_results, agent_filename);
+    end
+end
+
+function generateDRLActionPlot(simulation_results, output_dir)
+    % Generate DRL-specific action plot
+
+    if ~isfield(simulation_results.signals, 'action') || isempty(simulation_results.signals.action)
+        return;
+    end
+
+    try
+        fig = figure('Name', 'DRL Agent Actions', 'NumberTitle', 'off', ...
+                    'Position', [100 100 1200 600]);
+
+        time_hours = simulation_results.time / 3600;
+        actions = simulation_results.signals.action / 1000; % Convert to kW
+
+        % Plot actions
+        subplot(2, 1, 1);
+        plot(time_hours, actions, 'b-', 'LineWidth', 1.5);
+        xlabel('Time (hours)');
+        ylabel('Battery Power Command (kW)');
+        title('DRL Agent Actions Over Time');
+        grid on;
+
+        % Add zero line
+        yline(0, 'k--', 'Alpha', 0.5);
+
+        % Plot action histogram
+        subplot(2, 1, 2);
+        histogram(actions, 50, 'FaceColor', [0.2 0.6 0.8], 'EdgeColor', 'none');
+        xlabel('Battery Power Command (kW)');
+        ylabel('Frequency');
+        title('Distribution of DRL Agent Actions');
+        grid on;
+
+        % Add statistics
+        action_mean = mean(actions);
+        action_std = std(actions);
+        text(0.02, 0.98, sprintf('Mean: %.2f kW\nStd: %.2f kW', action_mean, action_std), ...
+             'Units', 'normalized', 'VerticalAlignment', 'top', ...
+             'BackgroundColor', 'white', 'EdgeColor', 'black');
+
+        % Save plot
+        plot_file = fullfile(output_dir, 'drl_agent_actions.png');
+        print(fig, plot_file, '-dpng', '-r300');
+        close(fig);
+
+    catch ME
+        fprintf('   Warning: Could not generate DRL action plot: %s\n', ME.message);
+    end
+end
+
+function generateBasicDRLPlots(simulation_results, agent_filename)
+    % Generate basic plots when modular plotting system is not available
+
+    fprintf('   Generating basic DRL plots...\n');
+
+    if isempty(simulation_results.signals)
+        fprintf('   Warning: No signal data available for plotting\n');
+        return;
+    end
+
+    try
+        % Create output directory
+        [~, agent_name, ~] = fileparts(agent_filename);
+        output_dir = sprintf('basic_drl_plots_%s', agent_name);
+        if ~exist(output_dir, 'dir')
+            mkdir(output_dir);
+        end
+
+        signals = simulation_results.signals;
+        time_hours = simulation_results.time / 3600;
+
+        % Power balance plot
+        if isfield(signals, 'P_pv') || isfield(signals, 'P_load')
+            fig1 = figure('Name', 'Power Balance', 'NumberTitle', 'off');
+            hold on;
+
+            if isfield(signals, 'P_pv') && ~isempty(signals.P_pv)
+                plot(time_hours, signals.P_pv/1000, 'g-', 'LineWidth', 1.5, 'DisplayName', 'PV Power');
+            end
+            if isfield(signals, 'P_load') && ~isempty(signals.P_load)
+                plot(time_hours, signals.P_load/1000, 'b-', 'LineWidth', 1.5, 'DisplayName', 'Load Power');
+            end
+            if isfield(signals, 'P_batt') && ~isempty(signals.P_batt)
+                plot(time_hours, signals.P_batt/1000, 'm-', 'LineWidth', 1.5, 'DisplayName', 'Battery Power');
+            end
+
+            xlabel('Time (hours)');
+            ylabel('Power (kW)');
+            title('System Power Balance');
+            legend('show');
+            grid on;
+
+            saveas(fig1, fullfile(output_dir, 'power_balance.png'));
+            close(fig1);
+        end
+
+        % SOC plot
+        if isfield(signals, 'SOC') && ~isempty(signals.SOC)
+            fig2 = figure('Name', 'Battery SOC', 'NumberTitle', 'off');
+            plot(time_hours, signals.SOC, 'b-', 'LineWidth', 1.5);
+            xlabel('Time (hours)');
+            ylabel('SOC (%)');
+            title('Battery State of Charge');
+            grid on;
+            ylim([0 100]);
+
+            saveas(fig2, fullfile(output_dir, 'battery_soc.png'));
+            close(fig2);
+        end
+
+        % DRL actions plot
+        if isfield(signals, 'action') && ~isempty(signals.action)
+            fig3 = figure('Name', 'DRL Actions', 'NumberTitle', 'off');
+            plot(time_hours, signals.action/1000, 'r-', 'LineWidth', 1.5);
+            xlabel('Time (hours)');
+            ylabel('Action (kW)');
+            title('DRL Agent Actions');
+            grid on;
+            yline(0, 'k--', 'Alpha', 0.5);
+
+            saveas(fig3, fullfile(output_dir, 'drl_actions.png'));
+            close(fig3);
+        end
+
+        fprintf('   Basic plots saved to: %s\n', output_dir);
+
+    catch ME
+        fprintf('   Warning: Basic plotting failed: %s\n', ME.message);
+    end
+end
+
+function displayResultsSummary(simulation_results)
+    % Display summary of simulation results
+
+    fprintf('>> Simulation Results Summary:\n');
+    fprintf('   ========================================\n');
+
+    if isfield(simulation_results, 'metrics') && ~isempty(simulation_results.metrics)
+        metrics = simulation_results.metrics;
+
+        % Duration
+        if isfield(metrics, 'duration_hours')
+            fprintf('   Duration: %.2f hours (%.2f days)\n', ...
+                    metrics.duration_hours, metrics.duration_days);
+        end
+
+        % Energy metrics
+        if isfield(metrics, 'pv_energy_kwh')
+            fprintf('   PV Generation: %.2f kWh\n', metrics.pv_energy_kwh);
+        end
+        if isfield(metrics, 'load_energy_kwh')
+            fprintf('   Load Consumption: %.2f kWh\n', metrics.load_energy_kwh);
+        end
+        if isfield(metrics, 'net_grid_energy')
+            fprintf('   Net Grid Exchange: %.2f kWh\n', metrics.net_grid_energy);
+        end
+
+        % Battery metrics
+        if isfield(metrics, 'soc_final')
+            fprintf('   Final SOC: %.1f%% (Initial: %.1f%%)\n', ...
+                    metrics.soc_final, metrics.soc_initial);
+        end
+        if isfield(metrics, 'soh_degradation')
+            fprintf('   SOH Degradation: %.4f%%\n', metrics.soh_degradation);
+        end
+
+        % Economic metrics
+        if isfield(metrics, 'electricity_cost')
+            fprintf('   Electricity Cost: $%.2f\n', metrics.electricity_cost);
+        end
+
+        % DRL metrics
+        if isfield(metrics, 'action_mean')
+            fprintf('   Average Action: %.2f kW (Std: %.2f kW)\n', ...
+                    metrics.action_mean/1000, metrics.action_std/1000);
+        end
+
+    else
+        fprintf('   Warning: No metrics available\n');
+    end
+
+    fprintf('   ========================================\n');
 end
