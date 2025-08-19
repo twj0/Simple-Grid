@@ -8,22 +8,11 @@ main_dir = fileparts(mfilename('fullpath'));
 
 disp('Adding project paths...');
 
-% Add the 'scripts' root directory
-scripts_dir = fullfile(main_dir, 'scripts');
-addpath(scripts_dir);
-
-% Add all subdirectories within 'scripts'
-addpath(fullfile(scripts_dir, 'agents', 'ddpg'));
-addpath(fullfile(scripts_dir, 'agents', 'sac'));
-addpath(fullfile(scripts_dir, 'agents', 'td3'));
-addpath(fullfile(scripts_dir, 'config'));
-addpath(fullfile(scripts_dir, 'data_generation'));
-addpath(fullfile(scripts_dir, 'environments'));
-addpath(fullfile(scripts_dir, 'models'));
-addpath(fullfile(scripts_dir, 'rewards'));
-addpath(fullfile(scripts_dir, 'training'));
-addpath(fullfile(scripts_dir, 'evaluation'));
-addpath(fullfile(scripts_dir, 'visualization'));
+% Add the 'config' directory
+config_dir = fullfile(main_dir, 'config');
+if exist(config_dir, 'dir')
+    addpath(config_dir);
+end
 
 % Add Integrated folder for compatibility (if exists)
 integrated_path = fullfile(main_dir, '..', 'Integrated');
@@ -43,34 +32,49 @@ fprintf('MATLAB path cache has been refreshed.\n');
 fprintf('\nChecking for workspace data...\n');
 try
     if load_workspace_data()
-        fprintf('? Workspace data loaded successfully\n');
+        fprintf('INFO: Workspace data loaded successfully.\n');
     else
-        fprintf('? Workspace data not available - run complete_fix to generate\n');
+        fprintf('INFO: Workspace data not available. Run `complete_fix` to generate it.\n');
     end
 catch ME
-    fprintf('? Failed to load workspace data: %s\n', ME.message);
+    fprintf('ERROR: Failed to load workspace data: %s\n', ME.message);
 end
 
-% Test configuration access after path setup
+% Test scientific configuration system access after path setup
 fprintf('\nTesting configuration access...\n');
 try
-    test_config = model_config();
-    fprintf('? Configuration test passed\n');
+    config = simulation_config('quick_1day');
+    fprintf('Configuration loaded: %s\n', config.meta.config_name);
+    fprintf('  Simulation: %d days, %d episodes, %e hours/step\n', ...
+            config.simulation.days, config.simulation.episodes, config.simulation.time_step_hours);
+    fprintf('  Battery: %d kWh, %d kW\n', ...
+            config.system.battery.capacity_kwh, config.system.battery.power_kw);
+    if config.hardware.use_gpu
+        fprintf('  Hardware: GPU\n');
+    else
+        fprintf('  Hardware: CPU\n');
+    end
+    if config.simulink.use_simulink
+        fprintf('  Simulink Model: %s (REQUIRED)\n', config.simulink.model_name);
+    else
+        fprintf('  Simulink Model: Disabled\n');
+    end
+    fprintf('INFO: Configuration access test passed.\n');
 catch ME
-    fprintf('? Configuration test failed: %s\n', ME.message);
+    fprintf('ERROR: Configuration access test failed: %s\n', ME.message);
     fprintf('Attempting to fix path issues...\n');
-    
+
     % Try to find and add config directory explicitly
-    config_dir = fullfile(main_dir, 'scripts', 'config');
+    config_dir = fullfile(main_dir, 'config');
     if exist(config_dir, 'dir')
         addpath(config_dir);
         fprintf('Added config directory explicitly: %s\n', config_dir);
         rehash;
         try
-            test_config = model_config();
-            fprintf('? Configuration fix successful\n');
+            config = simulation_config('quick_1day');
+            fprintf('INFO: Configuration path fix was successful.\n');
         catch
-            fprintf('? Configuration still not accessible\n');
+            fprintf('ERROR: Configuration is still not accessible after attempting to fix the path.\n');
         end
     end
 end

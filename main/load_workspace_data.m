@@ -13,7 +13,7 @@ data_dir = fullfile(pwd, 'data');
 
 % Check if data directory exists
 if ~exist(data_dir, 'dir')
-    fprintf('? Data directory not found: %s\n', data_dir);
+    fprintf('ERROR: Data directory not found: %s\n', data_dir);
     fprintf('Run complete_fix to generate data first\n');
     return;
 end
@@ -35,7 +35,7 @@ if exist(workspace_file, 'file')
         assignin('base', 'load_power_profile', load_data.load_power_profile);
         assignin('base', 'price_profile', load_data.price_profile);
         
-        fprintf('? All data loaded from combined workspace file\n');
+        fprintf('INFO: All data loaded successfully from the combined workspace file.\n');
         fprintf('  PV profile: %d points\n', length(load_data.pv_power_profile.Time));
         fprintf('  Load profile: %d points\n', length(load_data.load_power_profile.Time));
         fprintf('  Price profile: %d points\n', length(load_data.price_profile.Time));
@@ -44,7 +44,7 @@ if exist(workspace_file, 'file')
         return;
         
     catch ME
-        fprintf('? Failed to load combined workspace: %s\n', ME.message);
+        fprintf('WARNING: Failed to load combined workspace: %s\n', ME.message);
         fprintf('Trying individual files...\n');
     end
 end
@@ -56,9 +56,9 @@ try
     if exist(pv_file, 'file')
         pv_data = load(pv_file);
         assignin('base', 'pv_power_profile', pv_data.pv_power_profile);
-        fprintf('? PV profile loaded\n');
+        fprintf('INFO: PV profile loaded.\n');
     else
-        fprintf('? PV profile file not found: %s\n', pv_file);
+        fprintf('ERROR: PV profile file not found: %s\n', pv_file);
         return;
     end
     
@@ -66,9 +66,9 @@ try
     if exist(load_file, 'file')
         load_data = load(load_file);
         assignin('base', 'load_power_profile', load_data.load_power_profile);
-        fprintf('? Load profile loaded\n');
+        fprintf('INFO: Load profile loaded.\n');
     else
-        fprintf('? Load profile file not found: %s\n', load_file);
+        fprintf('ERROR: Load profile file not found: %s\n', load_file);
         return;
     end
     
@@ -76,17 +76,17 @@ try
     if exist(price_file, 'file')
         price_data = load(price_file);
         assignin('base', 'price_profile', price_data.price_profile);
-        fprintf('? Price profile loaded\n');
+        fprintf('INFO: Price profile loaded.\n');
     else
-        fprintf('? Price profile file not found: %s\n', price_file);
+        fprintf('ERROR: Price profile file not found: %s\n', price_file);
         return;
     end
     
-    fprintf('? All individual files loaded successfully\n');
+    fprintf('INFO: All individual data files loaded successfully.\n');
     success = true;
     
 catch ME
-    fprintf('? Failed to load individual files: %s\n', ME.message);
+    fprintf('ERROR: Failed to load individual data files: %s\n', ME.message);
     return;
 end
 
@@ -100,22 +100,22 @@ for i = 1:length(required_vars)
     if evalin('base', sprintf('exist(''%s'', ''var'')', var_name))
         var_data = evalin('base', var_name);
         if isa(var_data, 'timeseries')
-            fprintf('  ? %s: %d points\n', var_name, length(var_data.Time));
+            fprintf('  - Verified: %s (%d points, timeseries)\n', var_name, length(var_data.Time));
         else
-            fprintf('  ? %s: Wrong type (%s)\n', var_name, class(var_data));
+            fprintf('  - ERROR: %s has the wrong type (Expected: timeseries, Actual: %s)\n', var_name, class(var_data));
             all_present = false;
         end
     else
-        fprintf('  ? %s: Not found in workspace\n', var_name);
+        fprintf('  - ERROR: %s not found in the workspace.\n', var_name);
         all_present = false;
     end
 end
 
 if all_present
-    fprintf('? All required variables verified in workspace\n');
+    fprintf('INFO: All required variables have been verified in the workspace.\n');
     success = true;
 else
-    fprintf('? Some variables missing or incorrect\n');
+    fprintf('ERROR: Some required variables are missing or have an incorrect format.\n');
     success = false;
 end
 

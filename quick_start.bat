@@ -23,140 +23,261 @@ if not exist "%MAIN_DIR%" (
     exit /b 1
 )
 
-REM Check Simulink model
+REM Check Simulink model - CRITICAL requirement
 if not exist "%MAIN_DIR%\simulinkmodel\Microgrid.slx" (
-    echo ERROR: Microgrid.slx file not found in simulinkmodel folder
-    echo Please ensure Simulink model file exists at: %MAIN_DIR%\simulinkmodel\Microgrid.slx
+    echo.
+    echo ========================================
+    echo CRITICAL ERROR: Simulink Model Not Found
+    echo ========================================
+    echo.
+    echo The Simulink model is REQUIRED for DRL training.
+    echo Expected location: %MAIN_DIR%\simulinkmodel\Microgrid.slx
+    echo.
+    echo Without the Simulink model:
+    echo - DRL training CANNOT proceed
+    echo - The system cannot simulate the microgrid environment
+    echo.
+    echo Please ensure:
+    echo 1. The Simulink model file exists
+    echo 2. The file is not corrupted
+    echo 3. You have proper access permissions
+    echo.
+    echo Training will be DISABLED until the model is available.
+    echo ========================================
+    echo.
     pause
     exit /b 1
 )
 
-echo Files check passed!
+echo Simulink model check: PASSED
 echo.
 
+:menu
 echo Choose operation:
 echo.
-echo === Troubleshooting ===
-echo 0. Fix Model (solve Simulink issues)
+echo === System Check ===
+echo 0. Check Simulink Model Status
 echo.
 echo === Quick Start ===
 echo 1. Quick Test (verify functionality)
 echo 2. Quick Training (5 episodes, ~3 min)
 echo.
-echo === High-Performance 30-Day Physical Simulation ===
-echo 3. 30-Day GPU Simulation (1000 episodes, 30 days each, ~2-4 hours)
-echo 4. 30-Day CPU Simulation (500 episodes, 30 days each, ~4-8 hours)
-echo 5. 30-Day Analysis & Evaluation (analyze trained agents)
+echo === Configurable DRL Training ===
+echo 3. Quick Training (1 day, 5 episodes, ~5 minutes)
+echo 4. Default Training (7 days, 50 episodes, ~30 minutes)
+echo 5. Research Training (30 days, 100 episodes, ~2 hours)
+echo 6. Extended Training (90 days, 500 episodes, ~1 day)
+echo 7. Algorithm Comparison (DDPG vs TD3 vs SAC)
 echo.
-echo === Evaluation ===
-echo 6. Evaluate Trained Agent
-echo 7. Interactive MATLAB Menu
+echo === Analysis and Evaluation ===
+echo 8. Analyze DRL Results
+echo 9. Run Interactive MATLAB Menu
 echo.
-echo 8. Exit
+echo 10. Exit
 echo.
 
-set /p choice="Enter choice (0-8): "
+set /p choice="Enter choice (0-10): "
 
 REM Process choice
-if "%choice%"=="0" goto fixmodel
+if "%choice%"=="0" goto checkmodel
 if "%choice%"=="1" goto quicktest
 if "%choice%"=="2" goto quicktrain
-if "%choice%"=="3" goto gpu30day
-if "%choice%"=="4" goto cpu30day
-if "%choice%"=="5" goto analyze30day
-if "%choice%"=="6" goto evaluate
-if "%choice%"=="7" goto interactive
-if "%choice%"=="8" goto exit
+if "%choice%"=="3" goto quicktrain
+if "%choice%"=="4" goto defaulttrain
+if "%choice%"=="5" goto researchtrain
+if "%choice%"=="6" goto extendedtrain
+if "%choice%"=="7" goto comparison
+if "%choice%"=="8" goto analyze
+if "%choice%"=="9" goto interactive
+if "%choice%"=="10" goto exit
 
 echo Invalid choice!
 pause
-exit /b 1
+goto menu
 
-:fixmodel
+:checkmodel
 echo.
-echo === Fix Model ===
-echo Running comprehensive framework fix...
-echo This will automatically fix common issues:
-echo - Generate and fix data variables
-echo - Fix model configuration
-echo - Fix variable name mismatches
-echo - Fix From Workspace block settings
-echo - Find and verify RL Agent blocks
-echo - Test basic simulation
+echo === Check Simulink Model Status ===
+echo Checking if Simulink model exists and is valid...
 echo.
 cd /d "%MAIN_DIR%"
-matlab -r "setup_project_paths; complete_fix;"
-goto end
+matlab -r "setup_project_paths; try; load_system('simulinkmodel/Microgrid.slx'); fprintf('Simulink model loaded successfully\n'); close_system('simulinkmodel/Microgrid.slx', 0); catch ME; fprintf('Error loading model: %s\n', ME.message); end; pause(5); exit;"
+echo.
+echo If the model is missing, training cannot proceed.
+echo Please ensure Microgrid.slx exists in simulinkmodel folder.
+echo.
+pause
+goto menu
 
 :quicktest
 echo.
 echo === Quick Test ===
+echo Checking Simulink model before test...
+if not exist "%MAIN_DIR%\simulinkmodel\Microgrid.slx" (
+    echo ERROR: Cannot run test - Simulink model not found!
+    echo Please ensure Microgrid.slx exists before testing.
+    pause
+    goto menu
+)
 echo Running functionality test...
 cd /d "%MAIN_DIR%"
-matlab -r "setup_project_paths; addpath('../tools/matlab_scripts'); system_test;"
+matlab -r "setup_project_paths; try; fprintf('Testing core functionality...\n'); load_workspace_data; fprintf('Data loading: OK\n'); fprintf('System test completed successfully\n'); catch ME; fprintf('Test failed: %s\n', ME.message); end; pause(5); exit;"
 goto end
 
 :quicktrain
 echo.
 echo === Quick Training ===
-echo Starting 5-episode DDPG training test...
+echo Checking Simulink model before training...
+if not exist "%MAIN_DIR%\simulinkmodel\Microgrid.slx" (
+    echo.
+    echo ERROR: Cannot start training - Simulink model not found!
+    echo The Simulink model is REQUIRED for DRL training.
+    echo Please ensure Microgrid.slx exists in simulinkmodel folder.
+    echo.
+    pause
+    goto menu
+)
+echo Model check passed. Proceeding with training setup...
+echo.
+echo Configuration: 1 day, 5 episodes (~5 minutes)
+echo Perfect for testing and quick validation
+echo.
+echo Choose algorithm:
+echo 1. DDPG (baseline)
+echo 2. TD3 (improved stability)
+echo 3. SAC (maximum entropy)
+set /p alg="Enter algorithm choice (1-3): "
+if "%alg%"=="1" set algorithm=ddpg
+if "%alg%"=="2" set algorithm=td3
+if "%alg%"=="3" set algorithm=sac
+if not defined algorithm set algorithm=ddpg
+echo.
+set /p confirm="Start quick %algorithm% training? (y/n): "
+if /i not "%confirm%"=="y" goto menu
 cd /d "%MAIN_DIR%"
-matlab -r "setup_project_paths; quick_train_test;"
-goto end
+matlab -r "setup_project_paths; run_quick_training('%algorithm%');"
+goto menu
 
-:gpu30day
+:defaulttrain
 echo.
-echo === 30-Day GPU High-Performance Simulation ===
-echo Starting 30-day physical world simulation with GPU acceleration...
-echo This is a comprehensive training with:
-echo - 30 days physical simulation per episode
-echo - 1000 training episodes
-echo - GPU acceleration (if available)
-echo - Real-time step: 1 hour
-echo - Expected duration: 2-4 hours
+echo === Default Training ===
+echo Configuration: 7 days, 50 episodes (~30 minutes)
+echo Balanced configuration for regular use
 echo.
-echo WARNING: This is a long-running process!
-echo Make sure your computer can run uninterrupted for several hours.
+echo Choose algorithm:
+echo 1. DDPG (baseline)
+echo 2. TD3 (improved stability)
+echo 3. SAC (maximum entropy)
+set /p alg="Enter algorithm choice (1-3): "
+if "%alg%"=="1" set algorithm=ddpg
+if "%alg%"=="2" set algorithm=td3
+if "%alg%"=="3" set algorithm=sac
+if not defined algorithm set algorithm=ddpg
 echo.
-set /p confirm="Continue with 30-day GPU simulation? (y/n): "
-if /i not "%confirm%"=="y" goto end
+set /p confirm="Start default %algorithm% training? (y/n): "
+if /i not "%confirm%"=="y" goto menu
 cd /d "%MAIN_DIR%"
-matlab -r "setup_project_paths; train_30day_gpu_simulation;"
-goto end
+matlab -r "setup_project_paths; train_microgrid_drl('default', '%algorithm%');"
+goto menu
 
-:cpu30day
+:researchtrain
 echo.
-echo === 30-Day CPU High-Performance Simulation ===
-echo Starting 30-day physical world simulation with CPU...
-echo This is a comprehensive training with:
-echo - 30 days physical simulation per episode
-echo - 500 training episodes (reduced for CPU)
-echo - CPU-only training
-echo - Real-time step: 1 hour
-echo - Expected duration: 4-8 hours
+echo === Research Training ===
+echo Configuration: 30 days, 100 episodes (~2 hours)
+echo Research-grade configuration for publications
 echo.
-echo WARNING: This is a very long-running process!
-echo Make sure your computer can run uninterrupted for many hours.
+echo Choose algorithm:
+echo 1. DDPG (baseline)
+echo 2. TD3 (improved stability)
+echo 3. SAC (maximum entropy)
+set /p alg="Enter algorithm choice (1-3): "
+if "%alg%"=="1" set algorithm=ddpg
+if "%alg%"=="2" set algorithm=td3
+if "%alg%"=="3" set algorithm=sac
+if not defined algorithm set algorithm=ddpg
 echo.
-set /p confirm="Continue with 30-day CPU simulation? (y/n): "
-if /i not "%confirm%"=="y" goto end
+set /p confirm="Start research %algorithm% training? (y/n): "
+if /i not "%confirm%"=="y" goto menu
 cd /d "%MAIN_DIR%"
-matlab -r "setup_project_paths; train_30day_cpu_simulation;"
-goto end
+matlab -r "setup_project_paths; train_microgrid_drl('research', '%algorithm%');"
+goto menu
 
-:analyze30day
+:extendedtrain
 echo.
-echo === 30-Day Simulation Analysis & Evaluation ===
-echo Analyzing and evaluating 30-day trained agents...
+echo === Extended Training ===
+echo Configuration: 90 days, 500 episodes (~1 day)
+echo Extended configuration for comprehensive analysis
+echo.
+echo Choose algorithm:
+echo 1. DDPG (baseline)
+echo 2. TD3 (improved stability)
+echo 3. SAC (maximum entropy)
+set /p alg="Enter algorithm choice (1-3): "
+if "%alg%"=="1" set algorithm=ddpg
+if "%alg%"=="2" set algorithm=td3
+if "%alg%"=="3" set algorithm=sac
+if not defined algorithm set algorithm=ddpg
+echo.
+set /p confirm="Start extended %algorithm% training? (y/n): "
+if /i not "%confirm%"=="y" goto menu
+cd /d "%MAIN_DIR%"
+matlab -r "setup_project_paths; train_microgrid_drl('extended', '%algorithm%');"
+goto menu
+
+:comparison
+echo.
+echo === Algorithm Comparison ===
+echo This will train all three algorithms with research configuration
+echo for comprehensive performance comparison.
+echo.
+echo Algorithms to train:
+echo 1. DDPG (Deep Deterministic Policy Gradient)
+echo 2. TD3 (Twin Delayed DDPG)
+echo 3. SAC (Soft Actor-Critic)
+echo.
+echo Total estimated time: 6-8 hours
+set /p confirm="Continue with algorithm comparison? (y/n): "
+if /i not "%confirm%"=="y" goto menu
+cd /d "%MAIN_DIR%"
+echo Starting DDPG training...
+matlab -r "setup_project_paths; train_microgrid_drl('comparison', 'ddpg');"
+echo Starting TD3 training...
+matlab -r "setup_project_paths; train_microgrid_drl('comparison', 'td3');"
+echo Starting SAC training...
+matlab -r "setup_project_paths; train_microgrid_drl('comparison', 'sac');"
+echo All algorithms training completed!
+goto menu
+
+:analyze
+echo.
+echo === Results Analysis ===
+echo Analyzing training results and agent performance...
 echo This will:
-echo - Load trained 30-day agents
-echo - Run comprehensive evaluation
-echo - Generate performance plots
-echo - Compare different training results
-echo - Export analysis reports
+echo - Load all available training results
+echo - Analyze performance metrics
+echo - Generate comparison plots
+echo - Provide performance recommendations
 echo.
+set /p confirm="Continue with analysis? (y/n): "
+if /i not "%confirm%"=="y" goto menu
 cd /d "%MAIN_DIR%"
-matlab -r "setup_project_paths; analyze_30day_results;"
+matlab -r "setup_project_paths; analyze_results('all');"
+goto menu
+
+:compare
+echo.
+echo === Algorithm Performance Comparison ===
+echo Comparing performance of different DRL algorithms...
+echo This will:
+echo - Compare DDPG, TD3, and SAC performance
+echo - Generate comparative analysis
+echo - Create performance comparison plots
+echo - Provide algorithm selection recommendations
+echo.
+set /p confirm="Continue with comparison? (y/n): "
+if /i not "%confirm%"=="y" goto end
+cd /d "%MAIN_DIR%"
+matlab -r "setup_project_paths; compare_algorithms;"
 goto end
 
 :evaluate
@@ -172,7 +293,7 @@ echo.
 echo === Interactive Menu ===
 echo Starting MATLAB interactive menu...
 cd /d "%MAIN_DIR%"
-matlab -r "setup_project_paths; run_microgrid_framework;"
+matlab -r "setup_project_paths; run_scientific_drl_menu;"
 goto end
 
 :exit

@@ -14,11 +14,11 @@ TypeReductionMethod='karnikmendel'
 
 [Input1]
 Name='SOH'
-Range=[0.8 1]
+Range=[0 100]
 NumMFs=3
-MF1='Critical':'trapmf',[0.8 0.8 0.82 0.88],[1],[0 0.2]
-MF2='Worn':'trimf',[0.85 0.92 0.98],[1],[0.2 0.2]
-MF3='Healthy':'trapmf',[0.95 0.98 1 1],[1],[0.2 0]
+MF1='Critical':'trapmf',[0 20 40 60],[1],[0 0.2]
+MF2='Worn':'trimf',[50 80 90],[1],[0.2 0.2]
+MF3='Healthy':'trapmf',[85 90 95 100],[1],[0.2 0]
 
 [Input2]
 Name='Action_Magnitude'

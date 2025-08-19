@@ -1,105 +1,108 @@
 classdef MicrogridEnvironment < rl.env.MATLABEnvironment
-    % MICROGRIDENVIRONMENT - 微电网强化学习环境
-    % 
-    % 使用MATLAB类实现的微电网环境，避免Simulink依赖
+    % MICROGRIDENVIRONMENT - A Reinforcement Learning Environment for Microgrids
+    %
+    % This class implements a microgrid environment in MATLAB, providing a
+    % simplified, non-Simulink alternative for DRL experiments.
     
     properties
-        % 环境状态
-        SOC = 0.5;          % 电池SOC
-        SOH = 1.0;          % 电池SOH
-        TimeStep = 1;       % 当前时间步
+        % System State
+        SOC = 0.5;          % State of Charge (0 to 1)
+        SOH = 1.0;          % State of Health (0 to 1)
+        TimeStep = 1;       % Current simulation time step (hour)
         
-        % 系统参数
-        BatteryCapacity = 100 * 1000 * 3600;  % 100 kWh in Wh
-        BatteryPowerRating = 500 * 1000;      % 500 kW in W
+        % System Parameters
+        BatteryCapacity = 100 * 1000 * 3600;  % Battery capacity in Watt-hours (100 kWh)
+        BatteryPowerRating = 500 * 1000;      % Maximum battery power in Watts (500 kW)
         
-        % 数据
-        PVData
-        LoadData
-        PriceData
+        % Input Data Profiles
+        PVData              % Timeseries object for PV power profile (kW)
+        LoadData            % Timeseries object for Load power profile (kW)
+        PriceData           % Timeseries object for Electricity price profile (CNY/kWh)
     end
     
     methods
         function this = MicrogridEnvironment(obs_info, action_info)
-            % 构造函数
+            % Constructor
             this = this@rl.env.MATLABEnvironment(obs_info, action_info);
             
-            % 加载数据
+            % Load data from the base workspace
+            % Ensure that 'pv_power_profile', 'load_power_profile', and 'price_profile'
+            % are loaded into the workspace before creating the environment.
             this.PVData = evalin('base', 'pv_power_profile');
             this.LoadData = evalin('base', 'load_power_profile');
             this.PriceData = evalin('base', 'price_profile');
         end
         
         function [obs, reward, is_done, info] = step(this, action)
-            % 环境步进
+            % Execute one time step within the environment
             
-            % 获取当前时间的外部输入
+            % Get current external conditions
             current_hour = mod(this.TimeStep - 1, 24) + 1;
             current_day = floor((this.TimeStep - 1) / 24) + 1;
             
-            pv_power = this.PVData.Data(min(current_hour, length(this.PVData.Data))) * 1000;  % W
-            load_power = this.LoadData.Data(min(current_hour, length(this.LoadData.Data))) * 1000;  % W
-            price = this.PriceData.Data(min(current_hour, length(this.PriceData.Data)));
+            pv_power = this.PVData.Data(min(current_hour, length(this.PVData.Data))) * 1000;  % Convert kW to W
+            load_power = this.LoadData.Data(min(current_hour, length(this.LoadData.Data))) * 1000; % Convert kW to W
+            price = this.PriceData.Data(min(current_hour, length(this.PriceData.Data))); % CNY/kWh
             
-            % 电池动作处理
-            battery_power = action;  % W
-            battery_power = max(-this.BatteryPowerRating, min(this.BatteryPowerRating, battery_power));
+            % Constrain battery power action
+            battery_power = max(-this.BatteryPowerRating, min(this.BatteryPowerRating, action)); % Action is in Watts
             
-            % SOC更新
-            dt = 1;  % 1小时
+            % Update State of Charge (SOC)
+            dt_hours = 1; % Time step is 1 hour
             efficiency = 0.95;
-            if battery_power > 0  % 充电
-                energy_change = battery_power * dt * efficiency;
-            else  % 放电
-                energy_change = battery_power * dt / efficiency;
+            if battery_power > 0 % Charging
+                energy_change = battery_power * dt_hours * efficiency;
+            else % Discharging
+                energy_change = battery_power * dt_hours / efficiency;
             end
             
             new_soc = this.SOC + energy_change / this.BatteryCapacity;
-            new_soc = max(0.1, min(0.9, new_soc));
+            new_soc = max(0.1, min(0.9, new_soc)); % Enforce SOC limits (10% to 90%)
             
-            % SOH更新
+            % Update State of Health (SOH)
+            % Simplified degradation model based on power throughput
             soh_degradation = abs(battery_power) / this.BatteryPowerRating * 0.0001;
-            new_soh = max(0.5, this.SOH - soh_degradation);
+            new_soh = max(0.5, this.SOH - soh_degradation); % Enforce SOH lower limit
             
-            % 电网功率
-            grid_power = load_power - pv_power - battery_power;
+            % Calculate grid power exchange
+            grid_power = load_power - pv_power - battery_power; % W
             
-            % 奖励计算
-            economic_cost = abs(grid_power) * price * dt / 1000;
-            soh_penalty = (1 - new_soh) * 100;
+            % Calculate reward components
+            economic_cost = abs(grid_power) * price * dt_hours / 1000; % Cost in CNY
+            soh_penalty = (1 - new_soh) * 100; % Penalize health degradation
             soc_penalty = 0;
-            if new_soc < 0.2 || new_soc > 0.8
+            if new_soc < 0.2 || new_soc > 0.8 % Penalize extreme SOC values
                 soc_penalty = 10;
             end
             
-            reward = -(economic_cost + soh_penalty + soc_penalty);
+            reward = -(economic_cost + soh_penalty + soc_penalty); % Total reward is negative cost
             
-            % 更新状态
+            % Update internal state
             this.SOC = new_soc;
             this.SOH = new_soh;
             this.TimeStep = this.TimeStep + 1;
             
-            % 构建观测
+            % Formulate next observation
             obs = [pv_power/1000; load_power/1000; new_soc; new_soh; price; current_hour; current_day];
             
-            % 终止条件
-            is_done = (this.TimeStep > 24) || (new_soh < 0.6);
+            % Check for termination condition
+            is_done = (this.TimeStep > 24) || (new_soh < 0.6); % End episode after 24 hours or if SOH is too low
             
-            % 信息
+            % Return additional information
             info = struct('grid_power', grid_power, 'economic_cost', economic_cost);
         end
         
         function obs = reset(this)
-            % 环境重置
+            % Reset the environment to an initial state
             
-            % 重置状态
-            this.SOC = 0.3 + rand() * 0.5;  % 30%-80%
-            this.SOH = 1.0;
-            this.TimeStep = 1;
+            % Randomize initial state for better training generalization
+            this.SOC = 0.3 + rand() * 0.5;  % Random SOC between 30% and 80%
+            this.SOH = 1.0;                 % Reset SOH to full health
+            this.TimeStep = 1;              % Reset time to the first step
             
-            % 构建初始观测
-            pv_power = this.PVData.Data(1) * 1000;  % W
-            load_power = this.LoadData.Data(1) * 1000;  % W
+            % Get initial observation
+            pv_power = this.PVData.Data(1) * 1000;   % W
+            load_power = this.LoadData.Data(1) * 1000; % W
             price = this.PriceData.Data(1);
             
             obs = [pv_power/1000; load_power/1000; this.SOC; this.SOH; price; 1; 1];
